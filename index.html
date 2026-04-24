@@ -1,0 +1,355 @@
+```html
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeoResus PRO - Simulador de Alta Fidelidad</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
+        body { font-family: 'Plus Jakarta Sans', sans-serif; }
+        .monitor-font { font-family: 'JetBrains Mono', monospace; }
+        input[type=range] { -webkit-appearance: none; background: #1e293b; border-radius: 1rem; height: 8px; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 20px; width: 20px; border-radius: 50%; background: #3b82f6; cursor: pointer; border: 2px solid white; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const SPO2_GOALS = [
+            { min: 1, goal: "60-65%" }, { min: 2, goal: "65-70%" }, { min: 3, goal: "70-75%" },
+            { min: 4, goal: "75-80%" }, { min: 5, goal: "80-85%" }, { min: 10, goal: "85-95%" }
+        ];
+
+        const EQUIPMENT_POOL = [
+            { id: 'cuna', name: 'Cuna Radiante', cat: 'Calor', essential: true },
+            { id: 'bolsa_poli', name: 'Bolsa Polietileno', cat: 'Calor', essential: true, premaOnly: true },
+            { id: 'surfactante', name: 'Surfactante', cat: 'Drogas', essential: true, premaOnly: true },
+            { id: 'neopuff', name: 'Pieza en T (NeoPuff)', cat: 'VPP', essential: true },
+            { id: 'ambu', name: 'Bolsa Autoinflable', cat: 'VPP', essential: true },
+            { id: 'mascara_0', name: 'Máscara #0', cat: 'VPP', essential: true },
+            { id: 'mascara_1', name: 'Máscara #1', cat: 'VPP', essential: true },
+            { id: 'tubo_20', name: 'Tubo ET 2.0', cat: 'Vía Aérea', essential: false },
+            { id: 'tubo_25', name: 'Tubo ET 2.5', cat: 'Vía Aérea', essential: true },
+            { id: 'tubo_30', name: 'Tubo ET 3.0', cat: 'Vía Aérea', essential: true },
+            { id: 'tubo_35', name: 'Tubo ET 3.5', cat: 'Vía Aérea', essential: true },
+            { id: 'tubo_40', name: 'Tubo ET 4.0', cat: 'Vía Aérea', essential: false },
+            { id: 'laringo', name: 'Laringoscopio', cat: 'Vía Aérea', essential: true },
+            { id: 'steto', name: 'Estetoscopio', cat: 'Monitor', essential: true },
+            { id: 'spo2', name: 'Saturómetro', cat: 'Monitor', essential: true },
+            { id: 'term_rectal', name: 'Termómetro Rectal', cat: 'Distractor', essential: false }
+        ];
+
+        const CLINICAL_CASES = [
+            { id: 1, title: "Prematuro 27 semanas", vignette: "Gestante de 27 semanas ingresa en fase expulsiva. Líquido claro. No alcanzó corticoides antenatales. El equipo solicita tu presencia inmediata.", eg: 27, liquid: "Claro", risk: "Inmadurez pulmonar extrema", hr: 70, spo2: 45, tone: "Flácido", cry: "Apnea", needsSurfactant: true },
+            { id: 2, title: "Asfixia - Meconio", vignette: "41 semanas. Monitor fetal con bradicardia mantenida. Líquido meconial espeso. El recién nacido nace pálido y sin esfuerzo respiratorio.", eg: 41, liquid: "Meconial", risk: "Asfixia / SAM", hr: 50, spo2: 40, tone: "Muy flácido", cry: "Sin esfuerzo", needsSurfactant: false },
+            { id: 3, title: "Hemorragia Materna", vignette: "38 semanas. Desprendimiento prematuro de placenta. Madre con shock hipovolémico. El neonato nace pálido y con bradicardia severa.", eg: 38, liquid: "Hemático", risk: "Hipovolemia fetal", hr: 40, spo2: 30, tone: "Flácido", cry: "Apnea", needsSurfactant: false }
+            // Pool expandible a 40 casos siguiendo este esquema
+        ];
+
+        function App() {
+            const [view, setView] = useState('menu');
+            const [currentCase, setCurrentCase] = useState(null);
+            const [timer, setTimer] = useState(0);
+            const [isActive, setIsActive] = useState(false);
+            const [vitals, setVitals] = useState({ hr: 0, spo2: 0, resp: '' });
+            const [selectedEquip, setSelectedEquip] = useState([]);
+            const [askedBriefing, setAskedBriefing] = useState([]);
+            const [askedBirth, setAskedBirth] = useState([]);
+            const [logs, setLogs] = useState([]);
+            const [usedConsumables, setUsedConsumables] = useState([]);
+
+            // Configuración
+            const [pip, setPip] = useState(20);
+            const [fio2, setFio2] = useState(21);
+            const [flow, setFlow] = useState(10);
+            const [supportMode, setSupportMode] = useState('neopuff');
+
+            // Ventilación
+            const [ventCount, setVentCount] = useState(0);
+            const [isVenting, setIsVenting] = useState(false);
+            const [lastVentTime, setLastVentTime] = useState(0);
+            const [rhythmMsg, setRhythmMsg] = useState("");
+
+            const timerRef = useRef(null);
+
+            useEffect(() => {
+                if (isActive) {
+                    timerRef.current = setInterval(() => {
+                        setTimer(t => {
+                            const nt = t + 1;
+                            if (nt === 30) addLog("[!] EVALUACIÓN 30s: Revisar FC y esfuerzo respiratorio.", "alert");
+                            if (nt === 60) addLog("[!] MINUTO DE ORO: Iniciar VPP si FC < 100.", "alert");
+                            return nt;
+                        });
+                    }, 1000);
+                } else clearInterval(timerRef.current);
+                return () => clearInterval(timerRef.current);
+            }, [isActive]);
+
+            // Evolución de vitales en tiempo real
+            useEffect(() => {
+                if (view === 'resus') {
+                    const interval = setInterval(() => {
+                        setVitals(v => {
+                            let hrChange = (ventCount > 0 && flow >= 10) ? 1.5 : -0.5;
+                            if (supportMode === 'neopuff' && flow < 10) hrChange = -2; // Penalización flujo
+                            return {
+                                hr: Math.max(0, Math.min(160, Math.floor(v.hr + hrChange))),
+                                spo2: Math.max(0, Math.min(98, Math.floor(v.spo2 + (hrChange > 0 ? 0.5 : -0.2)))),
+                                resp: v.resp
+                            };
+                        });
+                    }, 2000);
+                    return () => clearInterval(interval);
+                }
+            }, [view, ventCount, flow, supportMode]);
+
+            const addLog = (m, status = 'info') => {
+                const icons = { info: '🔵', correct: '✅', error: '❌', late: '⏰', warn: '⚠️', alert: '🔔' };
+                setLogs(prev => [{ t: formatTime(timer), m, icon: icons[status], status }, ...prev]);
+            };
+
+            const formatTime = (s) => `${Math.floor(s/60)}:${(s%60).toString().padStart(2,'0')}`;
+
+            const handleVentilation = () => {
+                if (supportMode === 'freeflow') return;
+                const now = Date.now();
+                const diff = (now - lastVentTime) / 1000;
+                setVentCount(c => c + 1);
+                setLastVentTime(now);
+                setIsVenting(true);
+
+                if (lastVentTime !== 0) {
+                    if (diff < 0.6) { setRhythmMsg("¡RÁPIDO!"); addLog("Ritmo de ventilación excesivo.", "error"); }
+                    else if (diff > 2.5) { setRhythmMsg("LENTO..."); addLog("Ritmo de ventilación tardío.", "late"); }
+                    else { setRhythmMsg("RITMO CORRECTO"); addLog("Ventilación rítmica efectiva.", "correct"); }
+                }
+                setTimeout(() => { setIsVenting(false); setRhythmMsg(""); }, 300);
+            };
+
+            const startSession = () => {
+                const c = CLINICAL_CASES[Math.floor(Math.random() * CLINICAL_CASES.length)];
+                setCurrentCase(c);
+                setView('vignette');
+                setLogs([]);
+                setTimer(0);
+                setSelectedEquip([]);
+            };
+
+            // --- VISTAS ---
+
+            if (view === 'menu') return (
+                <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center">
+                    <div className="bg-blue-600 p-6 rounded-[2rem] shadow-2xl mb-8"><Activity size={48} /></div>
+                    <h1 className="text-4xl font-black mb-2 uppercase tracking-tighter">NeoResus PRO</h1>
+                    <p className="text-slate-500 mb-10 italic">Simulador de Alta Fidelidad AHA 2026</p>
+                    <button onClick={startSession} className="bg-blue-600 py-5 px-12 rounded-2xl font-black uppercase tracking-widest shadow-xl">Entrar a Guardia</button>
+                </div>
+            );
+
+            if (view === 'vignette') return (
+                <div className="min-h-screen flex items-center justify-center p-6">
+                    <div className="bg-slate-900 p-10 rounded-[3rem] border border-slate-800 max-w-md w-full shadow-2xl">
+                        <span className="text-[10px] font-black text-blue-500 uppercase tracking-widest mb-4 block">Aviso de Paritorio</span>
+                        <h2 className="text-2xl font-bold mb-4 leading-tight">{currentCase.title}</h2>
+                        <p className="text-slate-400 text-sm leading-relaxed mb-10 italic">"{currentCase.vignette}"</p>
+                        <button onClick={() => setView('briefing')} className="w-full bg-blue-600 py-4 rounded-2xl font-black uppercase tracking-widest">Aceptar Caso</button>
+                    </div>
+                </div>
+            );
+
+            if (view === 'briefing') return (
+                <div className="min-h-screen p-6 max-w-xl mx-auto flex flex-col justify-center">
+                    <h2 className="text-2xl font-black text-center mb-8 uppercase tracking-widest">1. Briefing Obstétrico</h2>
+                    <div className="grid gap-3">
+                        {[
+                            { id:'eg', q:'¿Edad Gestacional?', a:currentCase.eg + ' semanas' },
+                            { id:'liq', q:'¿Líquido Amniótico?', a:currentCase.liquid },
+                            { id:'risk', q:'¿Riesgos Adicionales?', a:currentCase.risk },
+                            { id:'cord', q:'¿Plan de Cordón?', a:'Clampeo tardío si es posible.' }
+                        ].map(it => (
+                            <button key={it.id} onClick={() => !askedBriefing.includes(it.id) && setAskedBriefing(p => [...p, it.id])} className={`p-6 rounded-3xl border-2 text-left relative overflow-hidden transition-all ${askedBriefing.includes(it.id) ? 'border-blue-600 bg-blue-600/10' : 'border-slate-800 bg-slate-900'}`}>
+                                <p className="text-[10px] font-black text-blue-500 uppercase mb-1">{it.q}</p>
+                                <p className={`font-bold transition-all ${askedBriefing.includes(it.id) ? 'opacity-100' : 'opacity-0'}`}>{it.a}</p>
+                                {!askedBriefing.includes(it.id) && <div className="absolute inset-0 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm text-[10px] font-black text-slate-500 uppercase">Preguntar</div>}
+                            </button>
+                        ))}
+                    </div>
+                    <button disabled={askedBriefing.length < 4} onClick={() => setView('equip')} className="w-full mt-10 bg-white text-black font-black py-4 rounded-3xl disabled:opacity-20 uppercase">Preparar Material</button>
+                </div>
+            );
+
+            if (view === 'equip') return (
+                <div className="min-h-screen p-6 max-w-2xl mx-auto pb-40">
+                    <h2 className="text-2xl font-black text-center mb-8 uppercase tracking-widest">2. Preparación de Mesa</h2>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        {EQUIPMENT_POOL.map(it => {
+                            const sel = selectedEquip.includes(it.id);
+                            return (
+                                <button key={it.id} onClick={() => setSelectedEquip(p => sel ? p.filter(x => x !== it.id) : [...p, it.id])} className={`p-4 rounded-2xl border-2 transition-all flex flex-col items-center gap-2 ${sel ? 'border-emerald-500 bg-emerald-500/10 text-white' : 'border-slate-800 bg-slate-900 text-slate-600'}`}>
+                                    <span className="text-[9px] font-black uppercase text-center leading-tight">{it.name}</span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                    <div className="fixed bottom-0 left-0 right-0 p-6 bg-slate-900 border-t border-slate-800 max-w-2xl mx-auto rounded-t-[3rem] z-50">
+                        <button onClick={() => { 
+                            if(currentCase.needsSurfactant && !selectedEquip.includes('surfactante')) addLog("ERROR: Olvidaste el surfactante.", "error");
+                            setView('birth'); 
+                        }} className="w-full bg-emerald-600 py-4 rounded-2xl font-black uppercase">¡Nace el Bebé!</button>
+                    </div>
+                </div>
+            );
+
+            if (view === 'birth') return (
+                <div className="min-h-screen flex flex-col items-center justify-center p-6">
+                    <h2 className="text-2xl font-black mb-8 uppercase tracking-widest">3 Preguntas de Oro</h2>
+                    <div className="grid gap-3 w-full max-w-sm">
+                        {[
+                            { id: 't', q: "¿Es a Término?", a: currentCase.eg >= 37 ? "Sí" : "No" },
+                            { id: 'to', q: "¿Buen Tono?", a: currentCase.tone },
+                            { id: 'r', q: "¿Respira o Llora?", a: currentCase.cry }
+                        ].map(it => (
+                            <button key={it.id} onClick={() => !askedBirth.includes(it.id) && setAskedBirth(p => [...p, it.id])} className={`p-6 rounded-3xl border-2 transition-all relative overflow-hidden ${askedBirth.includes(it.id) ? 'border-amber-600 bg-amber-600/10 text-white' : 'border-slate-800 bg-slate-900'}`}>
+                                <p className="text-[10px] font-black text-amber-500 uppercase mb-1">{it.q}</p>
+                                <p className={`text-xl font-bold transition-all ${askedBirth.includes(it.id) ? 'opacity-100' : 'opacity-0'}`}>{it.a}</p>
+                                {!askedBirth.includes(it.id) && <div className="absolute inset-0 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm text-[10px] font-black text-slate-500 uppercase tracking-widest">Evaluar</div>}
+                            </button>
+                        ))}
+                    </div>
+                    <button disabled={askedBirth.length < 3} onClick={() => { setIsActive(true); setVitals({hr: currentCase.hr, spo2: currentCase.spo2}); setView('resus'); addLog("Inicio de reanimación activa."); }} className="mt-10 bg-rose-600 py-4 px-12 rounded-3xl font-black uppercase animate-pulse">Proceder</button>
+                </div>
+            );
+
+            if (view === 'resus') return (
+                <div className="min-h-screen p-4 pb-52">
+                    {/* Monitor Dinámico */}
+                    <div className={`rounded-[2.5rem] p-6 mb-6 border-4 transition-all duration-500 ${timer >= 60 && vitals.hr < 100 ? 'bg-rose-950 border-rose-500 animate-pulse' : 'bg-slate-950 border-slate-800'}`}>
+                        <div className="flex justify-between items-start mb-6">
+                            <div className="flex flex-col">
+                                <span className="text-[9px] font-black text-emerald-500 uppercase">FC (LPM)</span>
+                                <span className="text-6xl font-black font-mono text-emerald-400">{vitals.hr || '---'}</span>
+                            </div>
+                            <div className="flex flex-col items-end">
+                                <span className="text-[9px] font-black text-sky-500 uppercase">SpO2 (%)</span>
+                                <span className="text-6xl font-black font-mono text-sky-400">{vitals.spo2 || '--'}</span>
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 bg-slate-900/50 p-3 rounded-2xl">
+                            {SPO2_GOALS.slice(0, 3).map((g, i) => (
+                                <div key={i} className={`text-center p-1 rounded-lg ${Math.floor(timer/60) + 1 === g.min ? 'bg-blue-600 text-white' : 'text-slate-500'}`}>
+                                    <p className="text-[7px] font-black uppercase">{g.min} Min</p>
+                                    <p className="text-[9px] font-bold">{g.goal}</p>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Controles de Configuración */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                        <div className="bg-slate-900 p-6 rounded-[2rem] border border-slate-800 space-y-5">
+                            <div className="flex justify-between items-center mb-2">
+                                <span className="text-[10px] font-black text-blue-400 uppercase">Soporte</span>
+                                <div className="flex gap-1">
+                                    {['neopuff', 'ambu', 'freeflow'].map(m => (
+                                        <button key={m} onClick={() => setSupportMode(m)} className={`px-2 py-1 rounded text-[8px] font-black uppercase ${supportMode === m ? 'bg-blue-600' : 'bg-slate-800 text-slate-500'}`}>{m}</button>
+                                    ))}
+                                </div>
+                            </div>
+                            <div>
+                                <div className="flex justify-between text-[9px] font-bold text-slate-500 mb-1"><span>PIP (cmH2O)</span><span>{pip}</span></div>
+                                <input type="range" min="15" max="40" value={pip} onChange={(e)=>setPip(parseInt(e.target.value))} className="w-full"/>
+                            </div>
+                            <div>
+                                <div className="flex justify-between text-[9px] font-bold text-slate-500 mb-1"><span>FiO2 (%)</span><span>{fio2}%</span></div>
+                                <input type="range" min="21" max="100" value={fio2} onChange={(e)=>setFio2(parseInt(e.target.value))} className="w-full"/>
+                            </div>
+                            <div>
+                                <div className="flex justify-between text-[9px] font-bold text-slate-500 mb-1"><span>Flujo (L/min)</span><span className={flow < 10 ? 'text-rose-500' : 'text-emerald-500'}>{flow} L</span></div>
+                                <input type="range" min="0" max="15" value={flow} onChange={(e)=>setFlow(parseInt(e.target.value))} className="w-full"/>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                            {['Secar', 'Estimular', 'Calor', 'Aspirar'].map(ac => (
+                                <button key={ac} onClick={() => addLog(`Paso Realizado: ${ac}`, 'correct')} className="bg-slate-800 p-4 rounded-2xl text-[10px] font-black uppercase border border-slate-700">Paso: {ac}</button>
+                            ))}
+                            <button onClick={() => setView('mrsopa')} className="w-full bg-amber-600/20 border border-amber-600 text-amber-500 font-black p-4 rounded-2xl text-[10px] uppercase col-span-2">Iniciar MR. SOPA</button>
+                        </div>
+                    </div>
+
+                    {/* Área de Ventilación Activa */}
+                    <div className="flex flex-col items-center gap-6 relative">
+                        <div className={`absolute -top-10 bg-blue-600 text-white px-4 py-1 rounded-full text-xs font-black transition-all ${rhythmMsg ? 'opacity-100 scale-100' : 'opacity-0 scale-50'}`}>{rhythmMsg}</div>
+                        {supportMode !== 'freeflow' ? (
+                            <button onMouseDown={handleVentilation} className={`w-32 h-32 rounded-full border-8 transition-all flex flex-col items-center justify-center ${isVenting ? 'bg-blue-600 scale-90 border-white' : 'bg-slate-900 border-blue-600'}`}>
+                                <Wind className={isVenting ? 'text-white' : 'text-blue-500'} size={40} />
+                                <span className="text-xl font-mono font-black text-white">{ventCount}</span>
+                            </button>
+                        ) : (
+                            <div className="w-32 h-32 rounded-full border-8 border-slate-800 bg-slate-900/50 flex items-center justify-center text-[9px] text-slate-600 font-black uppercase italic text-center p-4">O2 Flujo Libre</div>
+                        )}
+                        
+                        <div className="absolute -right-16 top-1/2 -translate-y-1/2 flex flex-col items-center">
+                            <div className="h-24 w-3 bg-slate-800 rounded-full relative border border-slate-700 overflow-hidden">
+                                <div className="absolute bottom-0 w-full bg-blue-500 transition-all duration-100" style={{ height: (isVenting || supportMode === 'freeflow') ? `${(pip/40)*100}%` : '0%' }}></div>
+                            </div>
+                            <span className="text-[7px] font-black text-slate-500 uppercase mt-2">PIP</span>
+                        </div>
+                    </div>
+
+                    {/* Asistente / Registro Dinámico */}
+                    <div className="fixed bottom-0 left-0 right-0 p-4 bg-slate-950 border-t border-slate-800 h-44 overflow-y-auto z-50">
+                        <div className="flex justify-between items-center mb-2 px-2">
+                            <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Asistente de Reanimación</span>
+                            <span className="text-[9px] font-bold text-amber-500">Reloj AHA: {formatTime(timer)}</span>
+                        </div>
+                        {logs.map((l, i) => (
+                            <div key={i} className={`text-[10px] font-mono mb-1.5 flex gap-2 items-start py-1 border-b border-slate-900/30 ${l.status === 'alert' ? 'animate-pulse' : ''}`}>
+                                <span className="text-slate-600">[{l.t}]</span>
+                                <span>{l.icon}</span>
+                                <span className={`${l.status === 'alert' ? 'text-amber-400 font-bold' : l.status === 'error' ? 'text-rose-400' : 'text-slate-300'}`}>{l.m}</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+
+            if (view === 'mrsopa') return (
+                <div className="min-h-screen bg-slate-950 p-6 flex flex-col justify-center max-w-xl mx-auto">
+                    <div className="bg-amber-600 p-5 rounded-t-[2.5rem] text-center font-black uppercase text-sm text-black">Ajustes Correctivos MR. SOPA</div>
+                    <div className="bg-white p-8 rounded-b-[2.5rem] space-y-3">
+                        {[
+                            {m:'M', n:'Máscara', d:'Re-ajustar sello.', r:'Sello mejorado.'},
+                            {m:'R', n:'Reposición', d:'Olfateo.', r:'Vía aérea alineada.'},
+                            {m:'S', n:'Succión', d:'Boca y nariz.', r:'Secreciones aspiradas.'},
+                            {m:'O', n:'Open', d:'Boca abierta.', r:'Apertura lograda.'},
+                            {m:'P', n:'Presión', d:'Subir PIP.', r:'Presión aumentada.'},
+                            {m:'A', n:'Alternativa', d:'Tubo / Laríngea.', r:'Listo para intubación.'}
+                        ].map(it => (
+                            <button key={it.m} onClick={() => addLog(`MR. SOPA: ${it.m} ejecutado. ${it.r}`, 'correct')} className="flex gap-4 items-center w-full text-left p-3 rounded-2xl hover:bg-slate-50 transition-all border border-transparent hover:border-amber-100">
+                                <span className="bg-amber-100 text-amber-600 w-12 h-12 rounded-2xl flex items-center justify-center font-black text-lg shrink-0 shadow-sm">{it.m}</span>
+                                <div><p className="text-sm font-bold text-slate-800 leading-none mb-0.5">{it.n}</p><p className="text-[10px] text-slate-500 leading-tight">{it.d}</p></div>
+                            </button>
+                        ))}
+                        <button onClick={() => setView('resus')} className="w-full bg-slate-950 text-white py-5 rounded-2xl font-black mt-6 uppercase tracking-widest shadow-xl">Re-evaluar VPP</button>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
+
+```
