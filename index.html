@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeoResus PRO - Simulador de Alta Fidelidad</title>
+    <!-- Librerías de confianza -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #020617; color: #f8fafc; }
+        .monitor-font { font-family: 'JetBrains Mono', monospace; }
+        .pulse-red { animation: pulse 1s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        /* Estilo para los sliders */
+        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 8px; background: #1e293b; border-radius: 10px; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 20px; width: 20px; border-radius: 50%; background: #3b82f6; cursor: pointer; margin-top: -6px; border: 2px solid #fff; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+
+        // --- ICONOS INLINE (Para evitar fallos de carga) ---
+        const IconClock = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>;
+        const IconAlert = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>;
+
+        // --- DATOS DE REFERENCIA ---
+        const SPO2_GOALS = [
+            { min: 1, range: "60-65%" }, { min: 2, range: "65-70%" }, { min: 3, range: "70-75%" },
+            { min: 4, range: "75-80%" }, { min: 5, range: "80-85%" }, { min: 10, range: "85-95%" }
+        ];
+
+        const EQUIPMENT_LIST = [
+            { id: 'cuna', name: 'Cuna Radiante', cat: 'Calor', essential: true },
+            { id: 'bolsa_poli', name: 'Bolsa Polietileno', cat: 'Calor', essential: true, premaOnly: true },
+            { id: 'surfactante', name: 'Surfactante', cat: 'Fármacos', essential: true, premaOnly: true },
+            { id: 'neopuff', name: 'Pieza en T (NeoPuff)', cat: 'VPP', essential: true },
+            { id: 'ambu', name: 'Ambu con Reservorio', cat: 'VPP', essential: true },
+            { id: 'mascara_0', name: 'Máscara #0', cat: 'VPP', essential: true },
+            { id: 'mascara_1', name: 'Máscara #1', cat: 'VPP', essential: true },
+            { id: 'tubo_20', name: 'Tubo ET 2.0', cat: 'Vía Aérea', essential: false },
+            { id: 'tubo_25', name: 'Tubo ET 2.5', cat: 'Vía Aérea', essential: true },
+            { id: 'tubo_30', name: 'Tubo ET 3.0', cat: 'Vía Aérea', essential: true },
+            { id: 'tubo_35', name: 'Tubo ET 3.5', cat: 'Vía Aérea', essential: true },
+            { id: 'tubo_40', name: 'Tubo ET 4.0', cat: 'Vía Aérea', essential: false },
+            { id: 'laringo', name: 'Laringoscopio', cat: 'Vía Aérea', essential: true },
+            { id: 'steto', name: 'Estetoscopio', cat: 'Monitor', essential: true },
+            { id: 'spo2_sensor', name: 'Saturómetro Pre-ductal', cat: 'Monitor', essential: true },
+            { id: 'term_rectal', name: 'Termómetro Rectal', cat: 'Distractor', essential: false }
+        ];
+
+        const CLINICAL_CASES = [
+            { 
+                id: 1, title: "Prematuro Extremo", 
+                vignette: "Embarazada de 27 semanas. Preeclampsia severa. No alcanzó corticoides. Parto inminente por desprendimiento parcial.",
+                eg: 27, liquid: "Claro", risk: "Inmadurez extrema", hr: 70, spo2: 50, tone: "Flácido", cry: "Apnea", surfactant: true 
+            },
+            { 
+                id: 2, title: "Post-término Meconial", 
+                vignette: "41 semanas. Monitoreo muestra bradicardia fetal. Líquido meconial espeso. El bebé nace pálido y sin esfuerzo.",
+                eg: 41, liquid: "Meconial", risk: "Asfixia / SAM", hr: 55, spo2: 45, tone: "Flácido", cry: "Apnea", surfactant: false 
+            },
+            { 
+                id: 3, title: "DPPNI Súbito", 
+                vignette: "38 semanas. Madre con sangrado profuso y dolor. Bradicardia fetal de 80 lpm hace 5 minutos.",
+                eg: 38, liquid: "Hemático", risk: "Hipovolemia fetal", hr: 45, spo2: 40, tone: "Muy flácido", cry: "Apnea", surfactant: false 
+            }
+        ];
+
+        function App() {
+            const [phase, setPhase] = useState('menu');
+            const [currentCase, setCurrentCase] = useState(null);
+            const [timer, setTimer] = useState(0);
+            const [isActive, setIsActive] = useState(false);
+            const [vitals, setVitals] = useState({ hr: 0, spo2: 0, resp: '' });
+            const [selectedEquip, setSelectedEquip] = useState([]);
+            const [askedBriefing, setAskedBriefing] = useState([]);
+            const [askedBirth, setAskedBirth] = useState([]);
+            const [logs, setLogs] = useState([]);
+
+            // Configuración dispositivos
+            const [mode, setMode] = useState('neopuff');
+            const [pip, setPip] = useState(20);
+            const [fio2, setFio2] = useState(21);
+            const [flow, setFlow] = useState(10);
+
+            // Ritmo ventilación
+            const [ventCount, setVentCount] = useState(0);
+            const [lastVent, setLastVent] = useState(0);
+            const [isVenting, setIsVenting] = useState(false);
+            const [rhythmMsg, setRhythmMsg] = useState("");
+
+            const timerRef = useRef(null);
+
+            // --- LÓGICA DE TIEMPO ---
+            useEffect(() => {
+                if (isActive) {
+                    timerRef.current = setInterval(() => {
+                        setTimer(t => {
+                            const nt = t + 1;
+                            if (nt === 30) addLog("[!] ALERTA 30s: Evaluar frecuencia y esfuerzo.", "alert");
+                            if (nt === 60) addLog("[!] ALERTA 60s: Si FC < 100 lpm, iniciar VPP.", "alert");
+                            return nt;
+                        });
+                    }, 1000);
+                } else clearInterval(timerRef.current);
+                return () => clearInterval(timerRef.current);
+            }, [isActive]);
+
+            // --- SIMULACIÓN FISIOLÓGICA ---
+            useEffect(() => {
+                if (phase === 'resus') {
+                    const interval = setInterval(() => {
+                        setVitals(v => {
+                            let hrInc = (ventCount > 0 && flow >= 10) ? 1.2 : -0.6;
+                            if (mode === 'neopuff' && flow < 8) hrInc = -2.5; 
+                            return {
+                                hr: Math.max(0, Math.min(160, Math.floor(v.hr + hrInc))),
+                                spo2: Math.max(0, Math.min(98, Math.floor(v.spo2 + (hrInc > 0 ? 0.4 : -0.3)))),
+                                resp: v.resp
+                            };
+                        });
+                    }, 2000);
+                    return () => clearInterval(interval);
+                }
+            }, [phase, ventCount, flow, mode]);
+
+            const formatTime = (s) => `${Math.floor(s/60)}:${(s%60).toString().padStart(2,'0')}`;
+
+            const addLog = (m, status = 'info') => {
+                const icons = { info: '🔹', correct: '✅', error: '❌', late: '⏰', warn: '⚠️', alert: '🔔' };
+                setLogs(prev => [{ t: formatTime(timer), m, icon: icons[status], status }, ...prev]);
+            };
+
+            const handleVentilation = () => {
+                if (mode === 'freeflow') return;
+                const now = Date.now();
+                const diff = (now - lastVent) / 1000;
+                setVentCount(c => c + 1);
+                setLastVent(now);
+                setIsVenting(true);
+
+                if (lastVent !== 0) {
+                    // Margen de 2 segundos según lo solicitado
+                    if (diff < 0.8) { setRhythmMsg("¡RÁPIDO!"); addLog("Frecuencia ventilatoria muy alta.", "error"); }
+                    else if (diff > 2.8) { setRhythmMsg("LENTO..."); addLog("Frecuencia ventilatoria muy baja.", "late"); }
+                    else { setRhythmMsg("RITMO CORRECTO"); addLog("Ventilación rítmica (Correcta).", "correct"); }
+                }
+                setTimeout(() => { setIsVenting(false); setRhythmMsg(""); }, 200);
+            };
+
+            const startGame = () => {
+                const c = CLINICAL_CASES[Math.floor(Math.random() * CLINICAL_CASES.length)];
+                setCurrentCase(c);
+                setPhase('vignette');
+                setLogs([]);
+                setTimer(0);
+                setSelectedEquip([]);
+                setAskedBriefing([]);
+                setAskedBirth([]);
+                setVentCount(0);
+                setIsActive(false);
+            };
+
+            // --- VISTAS ---
+
+            if (phase === 'menu') return (
+                <div className="min-h-screen flex flex-col items-center justify-center p-8 text-center bg-slate-950">
+                    <div className="bg-blue-600 p-6 rounded-[2.5rem] shadow-2xl mb-8"><svg width="50" height="50" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></div>
+                    <h1 className="text-4xl font-black mb-2 uppercase tracking-tighter">NeoResus Master</h1>
+                    <p className="text-slate-500 mb-10 italic">Simulación ECOE Neonatal 2026</p>
+                    <button onClick={startGame} className="bg-blue-600 hover:bg-blue-500 py-5 px-16 rounded-2xl font-black uppercase tracking-widest shadow-xl transition-all active:scale-95">Iniciar Guardia</button>
+                </div>
+            );
+
+            if (phase === 'vignette') return (
+                <div className="min-h-screen flex items-center justify-center p-6 bg-slate-950">
+                    <div className="bg-slate-900 p-10 rounded-[3rem] border border-slate-800 max-w-lg w-full shadow-2xl">
+                        <span className="text-[10px] font-black text-blue-500 uppercase tracking-widest mb-4 block">Urgencia</span>
+                        <h2 className="text-3xl font-black mb-4 leading-tight text-white">{currentCase.title}</h2>
+                        <p className="text-slate-400 text-lg leading-relaxed mb-10 italic">"{currentCase.vignette}"</p>
+                        <button onClick={() => setPhase('briefing')} className="w-full bg-blue-600 py-5 rounded-2xl font-black uppercase tracking-widest">Proceder al Briefing</button>
+                    </div>
+                </div>
+            );
+
+            if (phase === 'briefing') return (
+                <div className="min-h-screen p-6 max-w-xl mx-auto flex flex-col justify-center">
+                    <h2 className="text-2xl font-black text-center mb-8 uppercase tracking-widest text-blue-400">1. Briefing de Obstetricia</h2>
+                    <div className="grid gap-3">
+                        {[
+                            { id:'eg', q:'¿Edad Gestacional?', a:currentCase.eg + ' semanas' },
+                            { id:'liq', q:'¿Características del Líquido?', a:currentCase.liquid },
+                            { id:'riesgo', q:'¿Otros Factores de Riesgo?', a:currentCase.risk },
+                            { id:'cord', q:'¿Plan de Cordón?', a:'Clampeo diferido si es posible.' }
+                        ].map(it => (
+                            <button key={it.id} onClick={() => !askedBriefing.includes(it.id) && setAskedBriefing(p => [...p, it.id])} className={`p-6 rounded-3xl border-2 text-left relative overflow-hidden transition-all ${askedBriefing.includes(it.id) ? 'border-blue-500 bg-blue-500/10' : 'border-slate-800 bg-slate-900'}`}>
+                                <p className="text-[10px] font-black text-blue-500 uppercase mb-1">{it.q}</p>
+                                <p className={`font-bold transition-all text-white ${askedBriefing.includes(it.id) ? 'opacity-100' : 'opacity-0'}`}>{it.a}</p>
+                                {!askedBriefing.includes(it.id) && <div className="absolute inset-0 flex items-center justify-center bg-slate-900/80 backdrop-blur-sm text-[10px] font-black text-slate-500 uppercase">Preguntar</div>}
+                            </button>
+                        ))}
+                    </div>
+                    <button disabled={askedBriefing.length < 4} onClick={() => setPhase('equip')} className="w-full mt-10 bg-white text-black font-black py-4 rounded-3xl disabled:opacity-20 uppercase tracking-widest">Preparar Materiales</button>
+                </div>
+            );
+
+            if (phase === 'equip') return (
+                <div className="min-h-screen p-6 max-w-2xl mx-auto pb-40">
+                    <h2 className="text-2xl font-black text-center mb-4 uppercase text-blue-400">2. Checklist de Material</h2>
+                    <p className="text-center text-[10px] text-slate-500 uppercase mb-8">Selecciona solo el material necesario para el caso.</p>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                        {EQUIPMENT_LIST.map(it => {
+                            const sel = selectedEquip.includes(it.id);
+                            return (
+                                <button key={it.id} onClick={() => setSelectedEquip(p => sel ? p.filter(x => x !== it.id) : [...p, it.id])} className={`p-4 rounded-2xl border-2 transition-all flex flex-col items-center gap-2 ${sel ? 'border-emerald-500 bg-emerald-500/10 text-white' : 'border-slate-800 bg-slate-900 text-slate-600'}`}>
+                                    <span className="text-[9px] font-black uppercase text-center leading-tight">{it.name}</span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                    <div className="fixed bottom-0 left-0 right-0 p-6 bg-slate-900 border-t border-slate-800 max-w-2xl mx-auto rounded-t-[3rem] z-50">
+                        <button onClick={() => { 
+                            if(currentCase.surfactant && !selectedEquip.includes('surfactante')) addLog("Error Crítico: Faltará surfactante.", "error");
+                            setPhase('birth'); 
+                        }} className="w-full bg-emerald-600 py-5 rounded-2xl font-black uppercase shadow-xl">¡RN en Camino!</button>
+                    </div>
+                </div>
+            );
+
+            if (phase === 'birth') return (
+                <div className="min-h-screen flex flex-col items-center justify-center p-6">
+                    <h2 className="text-3xl font-black mb-10 uppercase tracking-widest text-amber-500">3 Preguntas de Oro</h2>
+                    <div className="grid gap-3 w-full max-w-sm">
+                        {[
+                            { id: 't', q: "¿Es de Término?", a: currentCase.eg >= 37 ? "Sí" : "No" },
+                            { id: 'to', q: "¿Tiene Tono?", a: currentCase.tone },
+                            { id: 'r', q: "¿Respira o Llora?", a: currentCase.cry }
+                        ].map(it => (
+                            <button key={it.id} onClick={() => !askedBirth.includes(it.id) && setAskedBirth(p => [...p, it.id])} className={`p-8 rounded-[2.5rem] border-2 transition-all relative overflow-hidden ${askedBirth.includes(it.id) ? 'border-amber-600 bg-amber-600/10 text-white shadow-lg' : 'border-slate-800 bg-slate-900'}`}>
+                                <p className="text-[10px] font-black text-amber-500 uppercase mb-2">{it.q}</p>
+                                <p className={`text-2xl font-black transition-all ${askedBirth.includes(it.id) ? 'opacity-100' : 'opacity-0'}`}>{it.a}</p>
+                                {!askedBirth.includes(it.id) && <div className="absolute inset-0 flex items-center justify-center bg-slate-900/80 backdrop-blur-sm text-[10px] font-black text-slate-500 uppercase tracking-widest">Evaluar RN</div>}
+                            </button>
+                        ))}
+                    </div>
+                    <button disabled={askedBirth.length < 3} onClick={() => { setIsActive(true); setVitals({hr: currentCase.hr, spo2: currentCase.spo2}); setPhase('resus'); addLog("RN en cuna radiante. Comienza el Minuto de Oro."); }} className="mt-12 bg-rose-600 py-5 px-16 rounded-3xl font-black uppercase tracking-widest animate-pulse shadow-2xl">Actuar</button>
+                </div>
+            );
+
+            if (phase === 'resus') return (
+                <div className="min-h-screen p-4 pb-52">
+                    {/* MONITOR INTEGRADO */}
+                    <div className={`rounded-[3rem] p-8 mb-6 border-4 transition-all duration-500 flex flex-col md:flex-row gap-8 shadow-2xl ${timer >= 60 && vitals.hr < 100 ? 'bg-rose-950 border-rose-500 pulse-red' : 'bg-black border-slate-800'}`}>
+                        <div className="flex-1">
+                            <div className="flex justify-between items-center mb-6">
+                                <span className="text-[10px] font-black text-slate-600 uppercase">Vital Monitor</span>
+                                <div className="flex items-center gap-2 text-amber-500 font-bold"><IconClock /> {formatTime(timer)}</div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-10">
+                                <div className="flex flex-col">
+                                    <span className="text-[10px] font-bold text-emerald-500 uppercase mb-1">HR (BPM)</span>
+                                    <span className="text-7xl font-black monitor-font text-emerald-400">{vitals.hr || '---'}</span>
+                                </div>
+                                <div className="flex flex-col items-end">
+                                    <span className="text-[10px] font-bold text-sky-500 uppercase mb-1">SpO2 (%)</span>
+                                    <span className="text-7xl font-black monitor-font text-sky-400">{vitals.spo2 || '--'}</span>
+                                </div>
+                            </div>
+                        </div>
+                        {/* TABLA SPO2 FIJA */}
+                        <div className="w-full md:w-52 bg-slate-900/40 p-4 rounded-3xl border border-slate-800">
+                            <p className="text-[8px] font-black text-slate-500 uppercase mb-3 text-center">SpO2 Targets</p>
+                            {SPO2_GOALS.map((g, i) => (
+                                <div key={i} className={`flex justify-between text-[10px] font-bold py-1 border-b border-white/5 ${Math.floor(timer/60) + 1 === g.min ? 'text-amber-400' : 'text-slate-500'}`}>
+                                    <span>{g.min}' min</span><span>{g.range}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* CONFIGURACIÓN DISPOSITIVOS */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                        <div className="bg-slate-900 p-6 rounded-3xl border border-slate-800 space-y-6">
+                            <div className="flex justify-between items-center">
+                                <span className="text-[10px] font-black text-blue-400 uppercase">Modo Respiratorio</span>
+                                <div className="flex gap-2">
+                                    {['neopuff', 'ambu', 'freeflow'].map(m => (
+                                        <button key={m} onClick={() => setMode(m)} className={`px-3 py-1 rounded-xl text-[9px] font-black uppercase transition-all ${mode === m ? 'bg-blue-600' : 'bg-slate-800 text-slate-500'}`}>{m}</button>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="space-y-6">
+                                <div><div className="flex justify-between text-[10px] font-bold text-slate-500 mb-1"><span>PIP (cmH2O)</span><span className="text-blue-400">{pip}</span></div><input type="range" min="15" max="40" value={pip} onChange={(e)=>setPip(parseInt(e.target.value))}/></div>
+                                <div><div className="flex justify-between text-[10px] font-bold text-slate-500 mb-1"><span>FiO2 (%)</span><span className="text-sky-400">{fio2}%</span></div><input type="range" min="21" max="100" value={fio2} onChange={(e)=>setFio2(parseInt(e.target.value))}/></div>
+                                <div><div className="flex justify-between text-[10px] font-bold text-slate-500 mb-1"><span>Flujo (L/min)</span><span className={flow < 10 && mode === 'neopuff' ? 'text-rose-500 font-black' : 'text-emerald-500'}>{flow} L</span></div><input type="range" min="0" max="15" value={flow} onChange={(e)=>setFlow(parseInt(e.target.value))}/></div>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                            {['Secar', 'Estimular', 'Calor', 'Aspirar'].map(ac => (
+                                <button key={ac} onClick={() => addLog(`Paso: ${ac}`, 'correct')} className="bg-slate-800 p-5 rounded-2xl text-[10px] font-black uppercase border border-slate-700 hover:bg-slate-700">Paso: {ac}</button>
+                            ))}
+                            <button onClick={() => setPhase('mrsopa')} className="w-full bg-amber-600/20 border border-amber-600 text-amber-500 font-black p-5 rounded-2xl text-[10px] uppercase col-span-2">Aplicar MR. SOPA</button>
+                        </div>
+                    </div>
+
+                    {/* ÁREA DE VENTILACIÓN */}
+                    <div className="flex flex-col items-center gap-6 relative">
+                        <div className={`absolute -top-12 bg-blue-600 text-white px-6 py-2 rounded-2xl text-sm font-black transition-all ${rhythmMsg ? 'opacity-100 scale-100' : 'opacity-0 scale-50'}`}>{rhythmMsg}</div>
+                        {mode !== 'freeflow' ? (
+                            <div className="relative group">
+                                <button onMouseDown={handleVentilation} className={`w-36 h-36 rounded-full border-8 transition-all flex flex-col items-center justify-center ${isVenting ? 'bg-blue-600 scale-90 border-white' : 'bg-slate-900 border-blue-600 shadow-2xl shadow-blue-900/40'}`}>
+                                    <svg className={`w-12 h-12 ${isVenting ? 'text-white' : 'text-blue-500'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M2 12h20"/></svg>
+                                    <span className="text-xl font-mono font-black text-white mt-1">{ventCount}</span>
+                                </button>
+                                {/* AGUJA PRESIÓN */}
+                                <div className="absolute -right-20 top-1/2 -translate-y-1/2 flex flex-col items-center">
+                                    <div className="h-32 w-4 bg-slate-800 rounded-full relative border border-slate-700 overflow-hidden shadow-inner">
+                                        <div className="absolute bottom-0 w-full bg-blue-400 transition-all duration-100" style={{ height: isVenting ? `${(pip/40)*100}%` : '0%' }}></div>
+                                    </div>
+                                    <span className="text-[7px] font-black text-slate-500 uppercase mt-2 tracking-widest">Presión</span>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="w-36 h-36 rounded-full border-8 border-slate-800 bg-slate-900/50 flex items-center justify-center text-[10px] text-slate-600 font-black uppercase text-center p-6 italic">Flujo Libre<br/>(Mascarilla Distancia)</div>
+                        )}
+                        
+                        <div className="flex gap-2 w-full max-w-sm">
+                            <button onClick={() => { setIsActive(false); setPhase('menu'); }} className="flex-1 bg-emerald-700 py-4 rounded-2xl font-black text-xs uppercase shadow-xl tracking-tighter">Estable / Fin</button>
+                            <button onClick={() => { addLog("Surfactante administrado.", "correct"); }} className="flex-1 bg-violet-700 py-4 rounded-2xl font-black text-xs uppercase shadow-xl tracking-tighter">Surfactante</button>
+                        </div>
+                    </div>
+
+                    {/* ASISTENTE & LOGS */}
+                    <div className="fixed bottom-0 left-0 right-0 p-4 bg-slate-950 border-t border-slate-800 h-48 overflow-y-auto z-50">
+                        <div className="flex justify-between items-center mb-3 px-2 border-b border-white/5 pb-2">
+                            <div className="flex items-center gap-2 text-[10px] font-black text-slate-500 uppercase tracking-widest"><IconAlert /> Asistente de Reanimación</div>
+                            <span className="text-xs font-bold text-amber-500">RELoj AHA: {formatTime(timer)}</span>
+                        </div>
+                        {logs.map((l, i) => (
+                            <div key={i} className={`text-[11px] font-mono mb-2 flex gap-2 items-start py-1 ${l.status === 'alert' ? 'bg-amber-500/10 p-2 rounded-xl animate-pulse' : ''}`}>
+                                <span className="text-slate-600">[{l.t}]</span>
+                                <span>{l.icon}</span>
+                                <span className={`${l.status === 'alert' ? 'text-amber-400 font-black' : l.status === 'error' ? 'text-rose-400' : 'text-slate-300'}`}>{l.m}</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+
+            if (phase === 'mrsopa') return (
+                <div className="min-h-screen bg-slate-950 p-6 flex flex-col justify-center max-w-xl mx-auto">
+                    <div className="bg-amber-600 p-5 rounded-t-[3rem] text-center font-black uppercase text-sm text-black tracking-widest">Procedimiento MR. SOPA</div>
+                    <div className="bg-white p-10 rounded-b-[3rem] space-y-4">
+                        {[
+                            {m:'M', n:'Máscara', d:'Ajustar sello facial.', r:'Sello mejorado.'},
+                            {m:'R', n:'Reposición', d:'Posición de olfateo.', r:'Vía aérea en eje.'},
+                            {m:'S', n:'Succión', d:'Boca y luego nariz.', r:'Secreciones removidas.'},
+                            {m:'O', n:'Open', d:'Boca abierta.', r:'Apertura mandibular.'},
+                            {m:'P', n:'Presión', d:'Subir PIP gradualmente.', r:'Presión aumentada.'},
+                            {m:'A', n:'Vía Alternativa', d:'Tubo ET / Laríngea.', r:'Listo para intubación.'}
+                        ].map(it => (
+                            <button key={it.m} onClick={() => { addLog(`MR. SOPA: Paso ${it.m} - ${it.r}`, 'correct'); }} className="flex gap-4 items-center w-full text-left p-4 rounded-3xl hover:bg-slate-50 transition-all border border-transparent hover:border-amber-200">
+                                <span className="bg-amber-100 text-amber-600 w-12 h-12 rounded-2xl flex items-center justify-center font-black text-xl shrink-0">{it.m}</span>
+                                <div><p className="text-sm font-bold text-slate-800 leading-none mb-1">{it.n}</p><p className="text-[10px] text-slate-500 leading-tight">{it.d}</p></div>
+                            </button>
+                        ))}
+                        <button onClick={() => setPhase('resus')} className="w-full bg-slate-950 text-white py-5 rounded-3xl font-black mt-8 uppercase shadow-2xl">Re-evaluar VPP</button>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
+
+```
